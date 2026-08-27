@@ -1,6 +1,6 @@
 {
   "name": "dsh-openrouter-monitor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DSH Web plugin: OpenRouter account balance, per-key spend and alert thresholds under the composer, with hover trend charts.",
   "type": "module",
   "main": "lib/index.js",
