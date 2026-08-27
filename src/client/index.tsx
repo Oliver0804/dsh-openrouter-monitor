@@ -21,11 +21,14 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // Type-only: pulls Context.settingsScope (the settingsScope binder service).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+// Type-only: pulls the `settings.plugin.item` SlotMap merge (keyed card slot).
+import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import { CONFIG_DEFAULTS, SETTINGS_NAMESPACE, type MonitorConfig } from '../shared/config.ts'
 import { en, zh, type MonitorKey } from './locales.ts'
 import { ensureRowCss } from './row-css.ts'
 import { MonitorRow } from './row.tsx'
+import { MonitorSettingsCard, MonitorSettingsCardController } from './settings-card.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -76,6 +79,7 @@ export function apply(ctx: ClientContext): void {
   // browser, loopback-only connection) degrades to schema defaults.
   let subscribeScope: ScopeLike['subscribe'] = () => () => {}
   let getScopeSnapshot: ScopeLike['getSnapshot'] = () => NO_SCOPE_SNAPSHOT
+  let cardController: MonitorSettingsCardController | undefined
   try {
     const binder = ctx.get('settingsScope')
     if (!binder) throw new Error('settingsScope absent')
@@ -85,6 +89,7 @@ export function apply(ctx: ClientContext): void {
       return snap.status === 'ready' ? snap : ({ status: snap.status, value: undefined } as MinimalSnapshot)
     }
     subscribeScope = bound.subscribe.bind(bound)
+    cardController = new MonitorSettingsCardController(bound)
   } catch {
     // Defaults-only mode; the setup box keeps the key side working.
   }
@@ -114,6 +119,24 @@ export function apply(ctx: ClientContext): void {
       MonitorRowBridge,
     ),
   )
+
+  // The settings card. The Plugins tab renders only the INTERSECTION of the
+  // namespaces this Host serves and the cards registered here — dispatched by
+  // `key` — so both halves of that contract are required for the entry to
+  // appear, and `key` MUST equal the namespace string exactly.
+  if (cardController) {
+    ctx.slots.inject('settings.plugin.item', function* () {
+      yield ctx.slots.register(
+        {
+          name: 'settings.plugin.item',
+          key: SETTINGS_NAMESPACE,
+          locale: LOCALE_NS,
+          inject: () => cardController!.inject(),
+        },
+        MonitorSettingsCard,
+      )
+    })
+  }
 }
 
 export { MonitorRow } from './row.tsx'

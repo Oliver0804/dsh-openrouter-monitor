@@ -35,6 +35,16 @@ export const zh = {
   'card.saveNet': '無法連線到 openrouter.ai。',
   'card.settingsHint': '輪詢間隔、告警閾值與顯示幣別在 DSH 設定 → OpenRouter 監控。',
   'status.updated': '{time}前更新',
+  'cfg.enabled': '啟用監控',
+  'cfg.interval': '輪詢間隔（分鐘，1–1440）',
+  'cfg.lowBalance': '低餘額告警（USD，0 為關閉）',
+  'cfg.dailySpend': '單日花費告警（USD，0 為關閉）',
+  'cfg.keyRemaining': 'Key 剩餘額度告警（USD，0 為關閉）',
+  'cfg.notify': '瀏覽器通知',
+  'cfg.currency': '顯示幣別',
+  'cfg.fxRate': '匯率（1 USD 兌該幣別）',
+  'cfg.reset': '還原',
+  'cfg.saveHint': '每項修改即時生效；「還原」清除該項覆寫、回到預設。',
 } satisfies Record<string, string>
 
 /** The key union. */
@@ -72,4 +82,14 @@ export const en = {
   'card.saveNet': 'Cannot reach openrouter.ai.',
   'card.settingsHint': 'Interval, thresholds and display currency live in DSH settings → OpenRouter monitor.',
   'status.updated': 'updated {time} ago',
+  'cfg.enabled': 'Enable monitor',
+  'cfg.interval': 'Poll interval (minutes, 1–1440)',
+  'cfg.lowBalance': 'Low-balance alert (USD, 0 = off)',
+  'cfg.dailySpend': 'Daily-spend alert (USD, 0 = off)',
+  'cfg.keyRemaining': 'Per-key remaining alert (USD, 0 = off)',
+  'cfg.notify': 'Browser notifications',
+  'cfg.currency': 'Display currency',
+  'cfg.fxRate': 'FX rate (per 1 USD)',
+  'cfg.reset': 'reset',
+  'cfg.saveHint': 'Every edit applies live; "reset" clears that override back to defaults.',
 } satisfies Record<MonitorKey, string>
