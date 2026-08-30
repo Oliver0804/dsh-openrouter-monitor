@@ -82,7 +82,9 @@ export function convertFromUsd(usd: number, cfg: Pick<MonitorConfig, 'currency' 
 /** Two decimals above one unit, four below (fractions of a cent stay readable). */
 function amountText(value: number): string {
   const safe = Number.isFinite(value) ? Math.max(0, value) : 0
-  return safe < 1 ? safe.toFixed(4) : safe.toFixed(2)
+  if (safe < 1) return safe.toFixed(4)
+  // Group the integer part — $12345.68 reads far worse than $12,345.68.
+  return safe.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
 
 /**

@@ -68,6 +68,13 @@ describe('money display', () => {
     expect(convertFromUsd(3, { currency: 'USD', fxRate: 0 })).toBe(3)
   })
 
+  it('groups thousands so large balances stay readable', () => {
+    expect(formatMoney(1234.5, { currency: 'USD', fxRate: 0 })).toBe('$1,234.50')
+    expect(formatMoney(1_234_567.891, { currency: 'USD', fxRate: 0 })).toBe('$1,234,567.89')
+    expect(formatMoney(12.4, { currency: 'USD', fxRate: 0 })).toBe('$12.40')
+    expect(formatMoney(0.5, { currency: 'USD', fxRate: 0 })).toBe('$0.5000')
+  })
+
   it('converts with the configured rate when positive', () => {
     expect(formatMoney(3, { currency: 'TWD', fxRate: 31 })).toBe('NT$93.00')
     // A zero rate must never collapse readouts to ¤0 silently.

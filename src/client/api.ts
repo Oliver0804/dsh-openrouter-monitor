@@ -13,10 +13,17 @@ import type { AccountSnapshot, KeySummary } from '../shared/thresholds.ts'
 
 const BASE = 'https://openrouter.ai/api/v1'
 
+/** Hard cap per request so a hung connection cannot wedge the poller. */
+const FETCH_TIMEOUT_MS = 15_000
+
 /** Anything that can go wrong with a poll, with a SHORT user-facing label. */
 export class OpenRouterError extends Error {
-  /** `network` (fetch threw), `unauthorized` (401), `forbidden` (403), `http`, or `bad-shape`. */
-  readonly kind: 'network' | 'unauthorized' | 'forbidden' | 'http' | 'bad-shape'
+  /**
+   * `network` (fetch threw), `timeout` (the cap above aborted it),
+   * `unauthorized` (401), `forbidden` (403), `rate-limit` (429),
+   * `server` (5xx), `http`, or `bad-shape`.
+   */
+  readonly kind: 'network' | 'timeout' | 'unauthorized' | 'forbidden' | 'rate-limit' | 'server' | 'http' | 'bad-shape'
   constructor(kind: OpenRouterError['kind'], message: string) {
     super(message)
     this.name = 'OpenRouterError'
@@ -46,13 +53,19 @@ export function parseKey(raw: unknown): KeySummary {
 }
 
 async function getJson(path: string, key: string): Promise<unknown> {
+  // `AbortSignal.timeout` is missing on very old browsers; then the fetch
+  // simply runs uncapped (the `?.` keeps that a plain call, not a crash).
+  const signal = AbortSignal.timeout?.(FETCH_TIMEOUT_MS)
   let response: Response
   try {
     response = await fetch(`${BASE}${path}`, {
       headers: { Authorization: `Bearer ${key}` },
+      signal,
     })
   } catch {
-    // TypeError from fetch: DNS, offline, or an extension blocking the call.
+    // TypeError from fetch: DNS, offline, or an extension blocking the call —
+    // or the timeout above fired and aborted it.
+    if (signal?.aborted) throw new OpenRouterError('timeout', 'timed out')
     throw new OpenRouterError('network', 'network error')
   }
   if (response.status === 401) throw new OpenRouterError('unauthorized', 'key rejected (401)')
@@ -60,6 +73,8 @@ async function getJson(path: string, key: string): Promise<unknown> {
     // A plain inference key CAN authenticate but cannot list keys.
     throw new OpenRouterError('forbidden', 'not a Provisioning/Management key (403)')
   }
+  if (response.status === 429) throw new OpenRouterError('rate-limit', 'rate limited (429)')
+  if (response.status >= 500) throw new OpenRouterError('server', `server error (${response.status})`)
   if (!response.ok) throw new OpenRouterError('http', `HTTP ${response.status}`)
   try {
     return await response.json()
@@ -107,15 +122,22 @@ export async function fetchAccount(key: string, now: Date = new Date()): Promise
 
 /**
  * Lightweight credential check for the setup box: a valid key that CANNOT
- * list keys answers `insufficient` (plain inference key); anything else is
- * `ok` / `invalid` per HTTP status.
+ * list keys answers `insufficient` (plain inference key); a request that
+ * never got a real verdict (offline, timed out, OpenRouter 5xx) answers
+ * `network` / `timeout` so the setup box can say so instead of blaming the
+ * key; anything else is `invalid` per HTTP status.
  */
-export async function probeKey(key: string): Promise<'ok' | 'invalid' | 'insufficient'> {
+export async function probeKey(
+  key: string,
+): Promise<'ok' | 'invalid' | 'insufficient' | 'network' | 'timeout'> {
   try {
     await getJson('/keys', key)
     return 'ok'
   } catch (error) {
-    if (error instanceof OpenRouterError && error.kind === 'forbidden') return 'insufficient'
+    if (error instanceof OpenRouterError) {
+      if (error.kind === 'forbidden') return 'insufficient'
+      if (error.kind === 'network' || error.kind === 'timeout') return error.kind
+    }
     return 'invalid'
   }
 }

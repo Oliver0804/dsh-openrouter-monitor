@@ -14,7 +14,7 @@
  * @module dsh-openrouter-monitor/client/settings-card
  */
 
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useState } from 'react'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { MonitorKey } from './locales.ts'
 import {
@@ -101,6 +101,8 @@ const RESET_STYLE = {
 
 const HINT_STYLE = { color: 'var(--dsw-alias-label-tertiary)', fontSize: '11px' } as const
 
+const ERROR_HINT_STYLE = { color: '#f85149', fontSize: '11px' } as const
+
 /** The card body. Pure view: every mutation goes through {@link props.save}. */
 export const MonitorSettingsCard = memo(function MonitorSettingsCard({
   t,
@@ -110,25 +112,42 @@ export const MonitorSettingsCard = memo(function MonitorSettingsCard({
 }: MonitorSettingsCardProps) {
   const state = useMonitorCard((s) => s)
   const cfg = state.config
+  // Transient hints: a write the host rejected, a non-positive FX rate.
+  const [saveFailed, setSaveFailed] = useState(false)
+  const [fxInvalid, setFxInvalid] = useState(false)
 
   type CardLabelKey = Extract<MonitorKey, `cfg.${string}`>
 
+  // A rejected write must surface: an unnoticed failure silently reverts on
+  // the next scope snapshot (e.g. the host's fxRate > 0 rule).
+  const saveSafe = (field: string, value: unknown): void => {
+    void Promise.resolve()
+      .then(() => save(field, value))
+      .then(
+        () => setSaveFailed(false),
+        () => setSaveFailed(true),
+      )
+  }
+  const discardSafe = (field: string): void => {
+    void Promise.resolve()
+      .then(() => discard(field))
+      .then(
+        () => setSaveFailed(false),
+        () => setSaveFailed(true),
+      )
+  }
+
   if (state.status !== 'ready') return null
 
-  const Row = ({
-    labelKey,
-    children,
-    field,
-  }: {
-    labelKey: CardLabelKey
-    field: string
-    children: React.ReactNode
-  }) => (
+  // A plain render helper, NOT an inline <Row> component: a component type
+  // defined here would be a NEW identity every render, remounting (and
+  // dropping the edits of) every uncontrolled input beneath it.
+  const renderRow = (labelKey: CardLabelKey, field: string, children: React.ReactNode) => (
     <div style={FIELD_ROW}>
       <span style={LABEL_STYLE}>
         {t(labelKey)}
         {state.overridden.has(field) && (
-          <button onClick={() => void discard(field)} style={RESET_STYLE} type="button">
+          <button onClick={() => discardSafe(field)} style={RESET_STYLE} type="button">
             ({t('cfg.reset')})
           </button>
         )}
@@ -139,16 +158,21 @@ export const MonitorSettingsCard = memo(function MonitorSettingsCard({
 
   return (
     <div style={CARD_STYLE}>
-      <Row field="enabled" labelKey="cfg.enabled">
+      {!cfg.enabled && <div style={HINT_STYLE}>{t('row.disabled')}</div>}
+      {renderRow(
+        'cfg.enabled',
+        'enabled',
         <input
           checked={cfg.enabled}
           disabled={!state.writable}
-          onChange={(e) => void save('enabled', e.target.checked)}
+          onChange={(e) => saveSafe('enabled', e.target.checked)}
           type="checkbox"
-        />
-      </Row>
+        />,
+      )}
 
-      <Row field="intervalMinutes" labelKey="cfg.interval">
+      {renderRow(
+        'cfg.interval',
+        'intervalMinutes',
         <input
           defaultValue={String(cfg.intervalMinutes)}
           disabled={!state.writable}
@@ -158,65 +182,78 @@ export const MonitorSettingsCard = memo(function MonitorSettingsCard({
           onBlur={(e) => {
             const next = clampIntervalMinutes(Number(e.target.value))
             e.target.value = String(next)
-            void save('intervalMinutes', next)
+            saveSafe('intervalMinutes', next)
           }}
           style={INPUT_STYLE}
           type="number"
-        />
-      </Row>
+        />,
+      )}
 
-      <Row field="lowBalanceUsd" labelKey="cfg.lowBalance">
+      {renderRow(
+        'cfg.lowBalance',
+        'lowBalanceUsd',
         <input
           defaultValue={String(cfg.lowBalanceUsd)}
           disabled={!state.writable}
           key={`lb${cfg.lowBalanceUsd}`}
           min={0}
           step="any"
-          onBlur={(e) => void save('lowBalanceUsd', Math.max(0, Number(e.target.value) || 0))}
+          onBlur={(e) => saveSafe('lowBalanceUsd', Math.max(0, Number(e.target.value) || 0))}
           style={INPUT_STYLE}
           type="number"
-        />
-      </Row>
+        />,
+      )}
 
-      <Row field="dailySpendUsd" labelKey="cfg.dailySpend">
+      {renderRow(
+        'cfg.dailySpend',
+        'dailySpendUsd',
         <input
           defaultValue={String(cfg.dailySpendUsd)}
           disabled={!state.writable}
           key={`ds${cfg.dailySpendUsd}`}
           min={0}
           step="any"
-          onBlur={(e) => void save('dailySpendUsd', Math.max(0, Number(e.target.value) || 0))}
+          onBlur={(e) => saveSafe('dailySpendUsd', Math.max(0, Number(e.target.value) || 0))}
           style={INPUT_STYLE}
           type="number"
-        />
-      </Row>
+        />,
+      )}
 
-      <Row field="keyRemainingUsd" labelKey="cfg.keyRemaining">
+      {renderRow(
+        'cfg.keyRemaining',
+        'keyRemainingUsd',
         <input
           defaultValue={String(cfg.keyRemainingUsd)}
           disabled={!state.writable}
           key={`kr${cfg.keyRemainingUsd}`}
           min={0}
           step="any"
-          onBlur={(e) => void save('keyRemainingUsd', Math.max(0, Number(e.target.value) || 0))}
+          onBlur={(e) => saveSafe('keyRemainingUsd', Math.max(0, Number(e.target.value) || 0))}
           style={INPUT_STYLE}
           type="number"
-        />
-      </Row>
+        />,
+      )}
 
-      <Row field="notify" labelKey="cfg.notify">
+      {renderRow(
+        'cfg.notify',
+        'notify',
         <input
           checked={cfg.notify}
           disabled={!state.writable}
-          onChange={(e) => void save('notify', e.target.checked)}
+          onChange={(e) => saveSafe('notify', e.target.checked)}
           type="checkbox"
-        />
-      </Row>
+        />,
+      )}
 
-      <Row field="currency" labelKey="cfg.currency">
+      {renderRow(
+        'cfg.currency',
+        'currency',
         <select
           disabled={!state.writable}
-          onChange={(e) => void save('currency', e.target.value)}
+          onChange={(e) => {
+            setFxInvalid(false)
+            saveSafe('currency', e.target.value)
+          }}
           style={INPUT_STYLE}
           value={cfg.currency}
         >
@@ -225,22 +262,37 @@ export const MonitorSettingsCard = memo(function MonitorSettingsCard({
               {code}
             </option>
           ))}
-        </select>
-      </Row>
+        </select>,
+      )}
 
-      <Row field="fxRate" labelKey="cfg.fxRate">
+      {renderRow(
+        'cfg.fxRate',
+        'fxRate',
         <input
           defaultValue={String(cfg.fxRate)}
           disabled={!state.writable || cfg.currency === 'USD'}
           key={`fx${cfg.fxRate}`}
           min={0}
           step="any"
-          onBlur={(e) => void save('fxRate', Math.max(0, Number(e.target.value) || 0))}
+          onBlur={(e) => {
+            const next = Math.max(0, Number(e.target.value) || 0)
+            // Mirror the host's validate hook locally: never send a write
+            // that would be rejected, and say why instead.
+            if (cfg.currency !== 'USD' && !(next > 0)) {
+              e.target.value = String(cfg.fxRate)
+              setFxInvalid(true)
+              return
+            }
+            setFxInvalid(false)
+            saveSafe('fxRate', next)
+          }}
           style={{ ...INPUT_STYLE, opacity: cfg.currency === 'USD' ? 0.5 : undefined }}
           type="number"
-        />
-      </Row>
+        />,
+      )}
 
+      {fxInvalid && <div style={ERROR_HINT_STYLE}>{t('cfg.fxRateInvalid')}</div>}
+      {saveFailed && <div style={ERROR_HINT_STYLE}>{t('cfg.saveError')}</div>}
       <div style={HINT_STYLE}>{t('cfg.saveHint')}</div>
     </div>
   )

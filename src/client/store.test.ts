@@ -60,6 +60,14 @@ describe('history', () => {
     expect(store.loadHistory()).toEqual([])
   })
 
+  it('discards samples whose today is non-finite (would poison the trend)', () => {
+    // JSON has no Infinity literal, but 1e999 parses to Infinity.
+    localStorage.setItem('dsh-openrouter-monitor:history', '[{"t":1,"balance":2,"today":1e999}]')
+    expect(store.loadHistory()).toEqual([])
+    localStorage.setItem('dsh-openrouter-monitor:history', '[{"t":1,"balance":2,"today":0.5}]')
+    expect(store.loadHistory()).toHaveLength(1)
+  })
+
   it('clears with the key removal path', () => {
     store.appendSample({ t: 0, balance: 1, today: 0 }, 0)
     store.clearHistory()

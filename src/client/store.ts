@@ -76,7 +76,15 @@ export function saveKey(key: string): void {
 function isSample(value: unknown): value is TrendSample {
   if (typeof value !== 'object' || value === null) return false
   const s = value as Record<string, unknown>
-  return typeof s.t === 'number' && Number.isFinite(s.t) && typeof s.balance === 'number' && Number.isFinite(s.balance)
+  // `today` too: a non-finite value would turn the trend geometry into NaN.
+  return (
+    typeof s.t === 'number' &&
+    Number.isFinite(s.t) &&
+    typeof s.balance === 'number' &&
+    Number.isFinite(s.balance) &&
+    typeof s.today === 'number' &&
+    Number.isFinite(s.today)
+  )
 }
 
 /** Oldest-first history; corrupt rows are discarded wholesale, not repaired. */

@@ -58,7 +58,8 @@ export const Trend = memo(function Trend({
   height = 52,
   label,
 }: TrendProps) {
-  if (values.length < minPoints) return null
+  // Non-finite samples would turn the whole geometry into NaN paths.
+  if (values.length < minPoints || !values.every(Number.isFinite)) return null
   const { xs, ys } = geometry(values, width, height)
   const points = xs.map((x, i) => `${x.toFixed(1)},${ys[i]!.toFixed(1)}`)
   const lastIdx = values.length - 1

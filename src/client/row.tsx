@@ -24,6 +24,7 @@ import {
   topKeys,
   type AccountSnapshot,
   type Alert,
+  type AlertId,
 } from '../shared/thresholds.ts'
 import type { MonitorKey } from './locales.ts'
 import { fetchAccount, OpenRouterError, probeKey } from './api.ts'
@@ -37,11 +38,38 @@ export interface RowProps {
   config: MonitorConfig | undefined
 }
 
+/** Why the last poll failed; `unknown` covers non-OpenRouterError throws. */
+type ErrorKind = OpenRouterError['kind'] | 'unknown'
+
 type FetchState =
   | { phase: 'idle' }
   | { phase: 'loading' }
-  | { phase: 'ok'; snapshot: AccountSnapshot; at: number }
-  | { phase: 'error'; message: string }
+  /** `errorKind` keeps the last failure visible beside the last good numbers. */
+  | { phase: 'ok'; snapshot: AccountSnapshot; at: number; errorKind?: ErrorKind }
+  | { phase: 'error'; kind: ErrorKind }
+
+/** Alert ids → dictionary keys; a new AlertId fails to compile until mapped. */
+const ALERT_KEYS: Record<AlertId, MonitorKey> = {
+  'low-balance': 'alert.lowBalance',
+  'daily-spend': 'alert.dailySpend',
+  'key-remaining': 'alert.keyRemaining',
+}
+
+/** Error kinds → dictionary keys, so failures read in the UI language. */
+const ERROR_KEYS: Record<ErrorKind, MonitorKey> = {
+  network: 'error.network',
+  timeout: 'error.timeout',
+  unauthorized: 'error.unauthorized',
+  forbidden: 'error.forbidden',
+  'rate-limit': 'error.rateLimit',
+  server: 'error.server',
+  http: 'error.http',
+  'bad-shape': 'error.badShape',
+  unknown: 'error.unknown',
+}
+
+/** OpenRouter keys are `sk-or-…`; anything else cannot possibly poll. */
+const KEY_PREFIX = 'sk-or-'
 
 const ROW_STYLE = {
   alignItems: 'center',
@@ -170,6 +198,8 @@ export function MonitorRow({ t, config }: RowProps) {
   /** Alerts that were already active at the previous evaluation. */
   const prevAlertsRef = useRef<readonly Alert[]>([])
   const inFlightRef = useRef(false)
+  /** `Date.now()` of the last good fetch; read by the visibility handler. */
+  const lastOkAtRef = useRef(0)
 
   const poll = useCallback(async () => {
     const key = store.loadKey()
@@ -178,12 +208,16 @@ export function MonitorRow({ t, config }: RowProps) {
     setState((current) => (current.phase === 'ok' ? current : { phase: 'loading' }))
     try {
       const snapshot = await fetchAccount(key)
+      lastOkAtRef.current = Date.now()
       setHistory(store.appendSample({ t: snapshot.t, balance: snapshot.balance, today: snapshot.today }))
       setState({ phase: 'ok', snapshot, at: Date.now() })
     } catch (error) {
-      const message = error instanceof OpenRouterError ? error.message : 'unknown error'
-      // Keep showing the last good numbers alongside the error dot.
-      setState((current) => (current.phase === 'ok' ? current : { phase: 'error', message }))
+      const kind: ErrorKind = error instanceof OpenRouterError ? error.kind : 'unknown'
+      // Keep showing the last good numbers alongside the error dot instead of
+      // discarding the failure silently.
+      setState((current) =>
+        current.phase === 'ok' ? { ...current, errorKind: kind } : { phase: 'error', kind },
+      )
     } finally {
       inFlightRef.current = false
     }
@@ -201,7 +235,9 @@ export function MonitorRow({ t, config }: RowProps) {
     }, intervalMinutes * 60_000)
     const onVisible = (): void => {
       if (document.visibilityState !== 'visible') return
-      if (state.phase === 'ok' && Date.now() - state.at < 30_000) return
+      // Freshness via ref: the effect closure would hold a stale `state` from
+      // the render that armed this listener, not the latest snapshot.
+      if (Date.now() - lastOkAtRef.current < 30_000) return
       void poll()
     }
     document.addEventListener('visibilitychange', onVisible)
@@ -233,7 +269,7 @@ export function MonitorRow({ t, config }: RowProps) {
       for (const alert of fired) {
         if (store.wasNotified(alert.id)) continue
         try {
-          new Notification(`OpenRouter · ${t(`alert.${alert.id}` as MonitorKey)}`, {
+          new Notification(`OpenRouter · ${t(ALERT_KEYS[alert.id])}`, {
             body: alert.detail,
           })
           store.markNotified(alert.id)
@@ -265,22 +301,28 @@ export function MonitorRow({ t, config }: RowProps) {
     }
   }, [cfg, state])
 
+  // The failing kind, whether there is no good snapshot at all ('error') or
+  // it arrived after the last good one ('ok' + errorKind).
+  const errorKind =
+    state.phase === 'error' ? state.kind : state.phase === 'ok' ? state.errorKind : undefined
+
   const dotColor =
     !hasKey ? COLOR_OFF
-    : state.phase === 'error' ? COLOR_ERR
+    : errorKind ? COLOR_ERR
     : alerts.length > 0 ? COLOR_WARN
     : COLOR_OK
 
   const saveDraft = async (): Promise<void> => {
     const trimmed = draftKey.trim()
     if (!trimmed) return
-    setSaveNote('…')
-    let result: 'ok' | 'invalid' | 'insufficient'
-    try {
-      result = await probeKey(trimmed)
-    } catch {
-      result = 'invalid'
+    // Cheap shape check first: probing a non-OpenRouter string would just
+    // come back 401 and read as "invalid key", which misleads.
+    if (!trimmed.startsWith(KEY_PREFIX)) {
+      setSaveNote(t('card.saveFormat'))
+      return
     }
+    setSaveNote('…')
+    const result = await probeKey(trimmed).catch(() => 'network' as const)
     if (result === 'ok') {
       store.saveKey(trimmed)
       setHasKey(true)
@@ -288,11 +330,13 @@ export function MonitorRow({ t, config }: RowProps) {
       setSaveNote(t('card.saveOk'))
       const fresh = await fetchAccount(trimmed).catch(() => undefined)
       if (fresh) {
+        lastOkAtRef.current = Date.now()
         setHistory(store.appendSample({ t: fresh.t, balance: fresh.balance, today: fresh.today }, 0))
         setState({ phase: 'ok', snapshot: fresh, at: Date.now() })
       }
     } else {
-      setSaveNote(result === 'insufficient' ? t('card.saveBad') : navigator.onLine === false ? t('card.saveNet') : t('card.saveBad'))
+      // A probe that never reached OpenRouter must not read as a bad key.
+      setSaveNote(result === 'network' || result === 'timeout' ? t('card.saveNet') : t('card.saveBad'))
     }
   }
 
@@ -310,7 +354,7 @@ export function MonitorRow({ t, config }: RowProps) {
   const lineMain =
     !hasKey ? t('row.noKey')
     : state.phase === 'loading' || state.phase === 'idle' ? t('row.loading')
-    : state.phase === 'error' && !money ? `${t('card.title')} · ${state.message}`
+    : state.phase === 'error' ? t('row.error', { message: t(ERROR_KEYS[state.kind]) })
     : `${t('row.balance', { amount: money!.balance })} · ${t('row.today', { amount: money!.today })}`
 
   return (
@@ -336,7 +380,7 @@ export function MonitorRow({ t, config }: RowProps) {
         )}
         {alerts.length > 0 && (
           <span style={{ color: COLOR_WARN }}>
-            ⚠ {alerts.map((a) => t(`alert.${a.id}` as MonitorKey)).join(' / ')}
+            ⚠ {alerts.map((a) => t(ALERT_KEYS[a.id])).join(' / ')}
           </span>
         )}
         {hasKey && (
@@ -355,8 +399,13 @@ export function MonitorRow({ t, config }: RowProps) {
       </div>
 
       {open && (
-        <div aria-hidden="true" style={CARD_STYLE}>
+        <div style={CARD_STYLE}>
           <div style={{ fontWeight: 600 }}>{t('card.title')}</div>
+          {state.phase === 'ok' && (
+            <div style={{ color: '#8b949e', fontSize: '11px' }}>
+              {t('status.updated', { time: agoText(Date.now() - state.at) })}
+            </div>
+          )}
 
           {state.phase === 'ok' && money ? (
             <>
@@ -420,17 +469,19 @@ export function MonitorRow({ t, config }: RowProps) {
               ) : (
                 alerts.map((a) => (
                   <div key={a.id} style={{ color: COLOR_WARN, fontSize: '11px' }}>
-                    ⚠ {t(`alert.${a.id}` as MonitorKey)} — {a.detail}
+                    ⚠ {t(ALERT_KEYS[a.id])} — {a.detail}
                   </div>
                 ))
               )}
             </>
-          ) : (
-            hasKey && <div style={{ marginTop: '6px' }}>{t('row.loading')}</div>
-          )}
+          ) : (state.phase === 'idle' || state.phase === 'loading') && hasKey ? (
+            <div style={{ marginTop: '6px' }}>{t('row.loading')}</div>
+          ) : null}
 
-          {state.phase === 'error' && (
-            <div style={{ color: COLOR_ERR, fontSize: '11px', marginTop: '6px' }}>{state.message}</div>
+          {errorKind && (
+            <div style={{ color: COLOR_ERR, fontSize: '11px', marginTop: '6px' }}>
+              {t(ERROR_KEYS[errorKind])}
+            </div>
           )}
 
           <div style={{ ...SECTION_STYLE, ...SETUP_STYLE }}>{t('card.setup')}</div>
